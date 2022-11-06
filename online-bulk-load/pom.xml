@@ -26,7 +26,13 @@
     <artifactId>online-bulk-load</artifactId>
     <packaging>jar</packaging>
     <name>Online Bulk Load</name>
-
+    <dependencies>
+        <dependency>
+            <groupId>ru.yandex.clickhouse</groupId>
+            <artifactId>clickhouse-jdbc</artifactId>
+            <version>0.3.2</version>
+        </dependency>
+    </dependencies>
     <build>
         <extensions>
             <extension>
@@ -35,8 +41,8 @@
                 <version>1.4.1.Final</version>
             </extension>
         </extensions>
-        <plugins>
-            <!-- Scala Format Plug-in -->
+ <!--       <plugins>
+            &lt;!&ndash; Scala Format Plug-in &ndash;&gt;
             <plugin>
                 <groupId>org.antipathy</groupId>
                 <artifactId>mvn-scalafmt_${scala.binary.version}</artifactId>
@@ -53,6 +59,6 @@
                     </execution>
                 </executions>
             </plugin>
-        </plugins>
+        </plugins>-->
     </build>
 </project>

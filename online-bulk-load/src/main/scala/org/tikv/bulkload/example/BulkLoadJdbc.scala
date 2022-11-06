@@ -18,50 +18,24 @@ package org.tikv.bulkload.example
 
 import org.apache.spark.SparkConf
 import org.apache.spark.sql.SparkSession
-import org.apache.spark.sql.types.{IntegerType, StringType, StructField, StructType}
 import org.slf4j.LoggerFactory
 import org.tikv.bulkload.RawKVBulkLoader
 
 import scala.util.Random
+import org.apache.spark.tikvbulkload.{CkJdbcRDD}
 
-object BulkLoadExample {
+import java.sql.DriverManager;
+object BulkLoadJdbc {
 
   private final val logger = LoggerFactory.getLogger(getClass.getName)
 
   def main(args: Array[String]): Unit = {
-    var pdaddr: String = "127.0.0.1:2379"
-    var prefix: String = "test_"
+    var pdaddr: String = "10.17.39.100:2379"
+    var prefix: String = ""
     var size: Long = 1000
-    var partition: Int = 10
+    var partition: Int = 1200
     var exit: Boolean = true
     var exact: Boolean = false
-
-    val value = "A" * 64
-
-    if (args.length > 0) {
-      pdaddr = args(0)
-    }
-
-    if (args.length > 1) {
-      prefix = args(1)
-    }
-
-    if (args.length > 2) {
-      size = args(2).toLong
-    }
-
-    if (args.length > 3) {
-      partition = args(3).toInt
-    }
-
-    if (args.length > 4) {
-      exit = args(4).toBoolean
-    }
-
-    if (args.length > 5) {
-      exact = args(5).toBoolean
-    }
-
     logger.info(s"""
          |*****************
          |pdaddr=$pdaddr
@@ -84,35 +58,33 @@ object BulkLoadExample {
       .setIfMissing("spark.app.name", getClass.getName)
 
     val spark = SparkSession.builder.config(sparkConf).getOrCreate()
+    val sql =
+      "select * from nucleic_information_copy_all where date_of_birth=? order by id_number asc"
 
-    val rdd = spark.sparkContext
-      .makeRDD(0L until partition, partition)
-      .flatMap { partitionIndex =>
-        val partitionSize = (size / partition).toInt
-        val random = new Random(partitionIndex)
-        new Iterator[(Array[Byte], Array[Byte])]() {
-          var i = 0
+    val jdbcRdd = new CkJdbcRDD(spark.sparkContext, () => {
+      Class.forName("ru.yandex.clickhouse.ClickHouseDriver") // 驱动包
 
-          override def hasNext: Boolean = i < partitionSize
+      val url = "jdbc:clickhouse://10.17.39.100:18123/merit?socket_timeout=600000" // url路径
+      val user = "default" // 账号
+      val password = "123456" // 密码
+      DriverManager.getConnection(url, user, password)
+    }, sql, 1, 1, 1)
+      .map(f => {
+        val key = f(0)
+        val mon = key.toString.substring(6, 14)
+        val str = f.zipWithIndex.reduce((x, y) => {
+          val vRes= x._2.toString + "=" + x._1.toString + "," + y._2.toString + "=" + y._1.toString
+          (vRes,1)
+        })
+//        println(str)
+        (mon + key, "{" + str._1 + "}")
+      })
+      .map(kv => {
+        (kv._1.getBytes, kv._2.getBytes)
+      })
 
-          override def next(): (Array[Byte], Array[Byte]) = {
-            i = i + 1
-            val index = if (exact) {
-              i + partitionIndex * partitionSize
-            } else {
-              random.nextLong() % 10000000000000L
-            }
-            val key = s"$prefix${genKey(index)}"
-            (key.toArray.map(_.toByte), value.toArray.map(_.toByte))
-          }
-        }
-      }
-      .coalesce(partition, shuffle = true)
-
-    val schema: StructType = StructType(Array(
-      StructField("key", StringType, false),
-      StructField("value", IntegerType, false)
-    ))
+    val tuples = jdbcRdd.collect()
+    val rdd = spark.sparkContext.parallelize(tuples)
 
     new RawKVBulkLoader(pdaddr).bulkLoad(rdd)
 
