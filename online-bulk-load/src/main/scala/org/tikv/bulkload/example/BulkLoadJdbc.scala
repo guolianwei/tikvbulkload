@@ -17,12 +17,13 @@
 package org.tikv.bulkload.example
 
 import org.apache.spark.SparkConf
+import org.apache.spark.rdd.RDD
 import org.apache.spark.sql.SparkSession
 import org.slf4j.LoggerFactory
 import org.tikv.bulkload.RawKVBulkLoader
 
 import scala.util.Random
-import org.apache.spark.tikvbulkload.{CkJdbcRDD}
+import org.apache.spark.tikvbulkload.CkJdbcRDD
 
 import java.sql.DriverManager;
 object BulkLoadJdbc {
@@ -57,36 +58,16 @@ object BulkLoadJdbc {
       .setIfMissing("spark.master", "local[*]")
       .setIfMissing("spark.app.name", getClass.getName)
 
-    val spark = SparkSession.builder.config(sparkConf).getOrCreate()
-    val sql =
-      "select * from nucleic_information_copy_all where date_of_birth=? order by id_number asc"
+    val loader = new RawKVBulkLoader(pdaddr)
 
-    val jdbcRdd = new CkJdbcRDD(spark.sparkContext, () => {
-      Class.forName("ru.yandex.clickhouse.ClickHouseDriver") // 驱动包
-
-      val url = "jdbc:clickhouse://10.17.39.100:18123/merit?socket_timeout=600000" // url路径
-      val user = "default" // 账号
-      val password = "123456" // 密码
-      DriverManager.getConnection(url, user, password)
-    }, sql, 1, 1, 1)
-      .map(f => {
-        val key = f(0)
-        val mon = key.toString.substring(6, 14)
-        val str = f.zipWithIndex.reduce((x, y) => {
-          val vRes= x._2.toString + "=" + x._1.toString + "," + y._2.toString + "=" + y._1.toString
-          (vRes,1)
-        })
-//        println(str)
-        (mon + key, "{" + str._1 + "}")
-      })
-      .map(kv => {
-        (kv._1.getBytes, kv._2.getBytes)
-      })
-
-    val tuples = jdbcRdd.collect()
-    val rdd = spark.sparkContext.parallelize(tuples)
-
-    new RawKVBulkLoader(pdaddr).bulkLoad(rdd)
+    for (i <- 1 to 1200) {
+      val spark = SparkSession.builder.config(sparkConf).getOrCreate()
+      val sql =
+        "select * from nucleic_information_copy_all where date_of_birth=? order by id_number asc"
+      val rdd: _root_.org.apache.spark.rdd.RDD[(Array[Byte], Array[Byte])] =
+        produceRdd(spark, sql, i)
+      loader.bulkLoad(rdd)
+    }
 
     val end = System.currentTimeMillis()
 
@@ -95,6 +76,41 @@ object BulkLoadJdbc {
     while (!exit) {
       Thread.sleep(1000)
     }
+  }
+
+  private def produceRdd(spark: SparkSession, sql: String, mIndex: Int) = {
+    val jdbcRdd = new CkJdbcRDD(spark.sparkContext, () => {
+      Class.forName("ru.yandex.clickhouse.ClickHouseDriver") // 驱动包
+
+      val url = "jdbc:clickhouse://10.17.39.100:18123/merit?socket_timeout=600000" // url路径
+      val user = "default" // 账号
+      val password = "123456" // 密码
+      DriverManager.getConnection(url, user, password)
+    }, sql, mIndex, mIndex, 1)
+      .map(f => {
+        val key = f(0)
+        val mon = key.toString.substring(6, 14)
+        val str = f.zipWithIndex.reduce((x, y) => {
+          if (x._2 == 0) {
+            val vRes =
+              (x._2 + 1).toString + "='" + x._1.toString + "'," + (y._2 + 1).toString + "='" + y._1.toString + "'"
+            (vRes, 2)
+          } else {
+            val vRes = x._1.toString + "," + (y._2 + 1).toString + "='" + y._1.toString + "'"
+            (vRes, 2)
+          }
+        })
+        //        println(str._1)
+        (mon + key, "{" + str._1 + "}")
+      })
+      .map(kv => {
+        (kv._1.getBytes, kv._2.getBytes)
+      })
+
+    val tuples = jdbcRdd.collect()
+    println("data len "+mIndex+" ->" + tuples.length)
+    val rdd = spark.sparkContext.parallelize(tuples)
+    rdd
   }
 
   private def genKey(i: Long): String = f"$i%016d"
